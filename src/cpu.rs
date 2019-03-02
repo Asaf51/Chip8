@@ -8,13 +8,26 @@ const RAM_SIZE: usize = 0xFFF;
 const STACK_SIZE: usize = 16;
 const START_OF_PROGRAM: usize = 0x200;
 
+pub const LETTERS_SPRITES: [u8; 80] = [
+    0xF0, 0x90, 0x90, 0x90, 0xF0, 0x20, 0x60, 0x20,
+    0x20, 0x70, 0xF0, 0x10, 0xF0, 0x80, 0xF0, 0xF0,
+    0x10, 0xF0, 0x10, 0xF0, 0x90, 0x90, 0xF0, 0x10,
+    0x10, 0xF0, 0x80, 0xF0, 0x10, 0xF0, 0xF0, 0x80,
+    0xF0, 0x90, 0xF0, 0xF0, 0x10, 0x20, 0x40, 0x40,
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, 0xF0, 0x90, 0xF0,
+    0x10, 0xF0, 0xF0, 0x90, 0xF0, 0x90, 0x90, 0xE0,
+    0x90, 0xE0, 0x90, 0xE0, 0xF0, 0x80, 0x80, 0x80,
+    0xF0, 0xE0, 0x90, 0x90, 0x90, 0xE0, 0xF0, 0x80,
+    0xF0, 0x80, 0xF0, 0xF0, 0x80, 0xF0, 0x80, 0x80
+];
+
 pub struct Cpu {
     memory: [u8; RAM_SIZE],
     v: [u8; 16],
     i: usize,
     pc: usize,
     sp: usize,
-    stack: [u8; STACK_SIZE],
+    stack: [usize; STACK_SIZE],
     timer: Timer,
     sound_timer: Timer,
     display: Display
@@ -36,7 +49,7 @@ impl Opcode {
             0x0000 => self.run_0x0xxx_opcode(cpu),
             0x1000 => cpu.pc = self.get_address(), // JP addr
             0x2000 => { // CALL addr
-                cpu.stack[cpu.sp] = cpu.pc as u8 + 2;
+                cpu.stack[cpu.sp] = cpu.pc + 2;
                 cpu.sp += 1;
                 cpu.pc = self.get_address()
             },
@@ -63,10 +76,11 @@ impl Opcode {
                 cpu.v[reg_number] = value;
             },
             0x7000 => {
-                let value = self.get_lowest_byte() as u8;
+                let value = self.get_lowest_byte() as u16;
                 let reg_number = self.get_nibble(1);
+                let res = cpu.v[reg_number] as u16 + value;
 
-                cpu.v[reg_number] += value;
+                cpu.v[reg_number] = res as u8;
             },
             0x8000 => self.run_0x8xxx_opcode(cpu),
             0x9000 => {
@@ -83,7 +97,7 @@ impl Opcode {
             },
             0xD000 => {
                 let (x, y) = self.get_xy_register_numbers();
-                let n = self.get_nibble(4);
+                let n = self.get_nibble(3);
                 // Reset flag
                 cpu.v[0xF] = 0;
                 for byte in 0..n {
@@ -109,11 +123,11 @@ impl Opcode {
     fn run_0xfxxx_opcode(&self, cpu: &mut Cpu) {
         match self.opcode & 0xFF {
             0x07 => cpu.v[self.get_nibble(1)] = cpu.timer.value, // LD Vx, DT
-            0x0A => unimplemented!(), // LD Vx, K
+            0x0A => loop {  }, // LD Vx, K
             0x15 => cpu.timer.value = cpu.v[self.get_nibble(1)], // LD DT, Vx
             0x18 => cpu.sound_timer.value = cpu.v[self.get_nibble(1)], // LD ST, Vx
             0x1E => cpu.i = cpu.v[self.get_nibble(1)] as usize,
-            0x29 => unimplemented!(), // LD F, Vx,
+            0x29 => cpu.i = (cpu.v[self.get_nibble(1)] as usize) * 5, // LD F, Vx,
             0x33 => {
                 cpu.memory[cpu.i] = cpu.v[self.get_nibble(1)] / 100;
                 cpu.memory[cpu.i + 1] = (cpu.v[self.get_nibble(1)] / 10) % 10;
@@ -146,7 +160,7 @@ impl Opcode {
     }
 
     fn get_nibble(&self, nibble: u8) -> usize {
-        ((self.opcode >> (nibble * 4)) & 0xF) as usize
+        ((self.opcode >> (12 - (nibble * 4))) & 0xF) as usize
     }
 
     fn get_address(&self) -> usize {
@@ -161,8 +175,8 @@ impl Opcode {
         match self.opcode & 0xf {
             0x0 => cpu.display.clear(),
             0xe => {
+                cpu.pc = cpu.stack[cpu.sp - 1];
                 cpu.sp -= 1;
-                cpu.pc = cpu.memory[cpu.sp] as usize;
             },
             _ => unimplemented!()
         }
@@ -176,13 +190,13 @@ impl Opcode {
             0x2 => cpu.v[x] &= cpu.v[y],
             0x3 => cpu.v[x] ^= cpu.v[y],
             0x4 => {
-                let res: u16 = (cpu.v[x] + cpu.v[y]).into();
+                let res = cpu.v[x] as u16 + cpu.v[y] as u16;
                 cpu.v[0xF] = if res > 0xFF { 1 } else { 0 };
                 cpu.v[x] = (res & 0x00FF) as u8
             },
             0x5 => {
                 cpu.v[0xF] = if cpu.v[x] > cpu.v[y] { 1 } else { 0 };
-                cpu.v[x] -= cpu.v[y]
+                cpu.v[x] = cpu.v[x].wrapping_sub(cpu.v[y])
             },
             0x6 => {
                 cpu.v[0xF] = cpu.v[x] & 1;
@@ -190,7 +204,7 @@ impl Opcode {
             },
             0x7 => {
                 cpu.v[0xF] = if cpu.v[x] < cpu.v[y] { 1 } else { 0 };
-                cpu.v[x] = cpu.v[y] - cpu.v[x];
+                cpu.v[x] = cpu.v[y].wrapping_sub(cpu.v[x])
             },
             0xE => {
                 cpu.v[0xF] = cpu.v[x] >> 7;
@@ -218,6 +232,11 @@ impl Cpu {
         for index in 0..cartridge.size {
             cpu.memory[START_OF_PROGRAM + index] = cartridge.buffer[index];
         }
+
+        for index in 0..LETTERS_SPRITES.len() {
+            cpu.memory[index] = LETTERS_SPRITES[index];
+        }
+
         cpu
     }
 
