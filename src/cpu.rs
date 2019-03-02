@@ -1,4 +1,5 @@
 use rand::Rng;
+use crate::timer::Timer;
 
 const RAM_SIZE: usize = 0xFFF;
 const STACK_SIZE: usize = 16;
@@ -10,7 +11,9 @@ pub struct Cpu {
     i: usize,
     pc: usize,
     sp: usize,
-    stack: [u8; STACK_SIZE]
+    stack: [u8; STACK_SIZE],
+    timer: Timer,
+    sound_timer: Timer,
 }
 
 struct Opcode {
@@ -84,13 +87,11 @@ impl Opcode {
 
     fn run_0xfxxx_opcode(&self, cpu: &mut Cpu) {
         match self.opcode & 0xFF {
-            0x07 => unimplemented!(), // LD Vx, DT
+            0x07 => cpu.v[self.get_nibble(1)] = cpu.timer.value, // LD Vx, DT
             0x0A => unimplemented!(), // LD Vx, K
-            0x15 => unimplemented!(), // LD DT, Vx
-            0x18 => unimplemented!(), // LD ST, Vx
-            0x1E => {
-                cpu.i = cpu.v[self.get_nibble(1)] as usize;
-            },
+            0x15 => cpu.timer.value = cpu.v[self.get_nibble(1)], // LD DT, Vx
+            0x18 => cpu.sound_timer.value = cpu.v[self.get_nibble(1)], // LD ST, Vx
+            0x1E => cpu.i = cpu.v[self.get_nibble(1)] as usize,
             0x29 => unimplemented!(), // LD F, Vx,
             0x33 => {
                 cpu.memory[cpu.i] = cpu.v[self.get_nibble(1)] / 100;
@@ -111,7 +112,7 @@ impl Opcode {
         }
     }
 
-    fn run_0xexxx_opcode(&self, cpu: &mut Cpu) {
+    fn run_0xexxx_opcode(&self, _cpu: &mut Cpu) {
         match self.opcode & 0xFF {
             0x9E => unimplemented!(), // SKP Vx
             0xA1 => unimplemented!(), // SKNP Vx
@@ -188,7 +189,13 @@ impl Cpu {
             pc: START_OF_PROGRAM,
             sp: 0,
             stack: [0; STACK_SIZE],
+            sound_timer: Timer::new(Cpu::beep),
+            timer: Timer::new_no_callback()
         }
+    }
+
+    fn beep() {
+        unimplemented!();
     }
 
     fn fetch_opcode(&mut self) -> Opcode {
@@ -204,6 +211,7 @@ impl Cpu {
 
     pub fn tick(&mut self) {
         self.run_opcode();
-
+        self.timer.tick();
+        self.sound_timer.tick();
     }
 }
