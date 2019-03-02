@@ -6,3 +6,8 @@ edition = "2018"
 
 [dependencies]
 rand = "0.3.14"
+
+[dependencies.sdl2]
+version = "0.30"
+default-features = false
+features = ["gfx"]

@@ -1,5 +1,8 @@
+use crate::cartridge::Cartridge;
 use rand::Rng;
 use crate::timer::Timer;
+use crate::display::{Display, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use std::{thread, time};
 
 const RAM_SIZE: usize = 0xFFF;
 const STACK_SIZE: usize = 16;
@@ -14,6 +17,7 @@ pub struct Cpu {
     stack: [u8; STACK_SIZE],
     timer: Timer,
     sound_timer: Timer,
+    display: Display
 }
 
 struct Opcode {
@@ -32,7 +36,7 @@ impl Opcode {
             0x0000 => self.run_0x0xxx_opcode(cpu),
             0x1000 => cpu.pc = self.get_address(), // JP addr
             0x2000 => { // CALL addr
-                cpu.stack[cpu.sp + 1] = cpu.pc as u8;
+                cpu.stack[cpu.sp] = cpu.pc as u8 + 2;
                 cpu.sp += 1;
                 cpu.pc = self.get_address()
             },
@@ -77,7 +81,24 @@ impl Opcode {
                 let random_number = rand::thread_rng().gen_range(0, 0xFF);
                 cpu.v[self.get_nibble(1)] = self.get_lowest_byte() & random_number;
             },
-            0xD000 => unimplemented!(),
+            0xD000 => {
+                let (x, y) = self.get_xy_register_numbers();
+                let n = self.get_nibble(4);
+                // Reset flag
+                cpu.v[0xF] = 0;
+                for byte in 0..n {
+                    let y = (cpu.v[y] as usize + byte) % DISPLAY_HEIGHT;
+                    for bit in 0..8 {
+                        let x = (cpu.v[x] as usize + bit) % DISPLAY_WIDTH;
+                        let color = (cpu.memory[cpu.i + byte] >> (7 - bit)) & 1;
+                        cpu.v[0xF] |= color & cpu.display.vram[y][x];
+                        cpu.display.vram[y][x] ^= color;
+
+                    }
+                }
+
+                cpu.display.needs_draw = true;
+            },
             0xE000 => self.run_0xexxx_opcode(cpu),
             0xF000 => self.run_0xfxxx_opcode(cpu),
             _ => unimplemented!()
@@ -121,7 +142,7 @@ impl Opcode {
     }
 
     fn get_lowest_byte(&self) -> u8{
-        (self.opcode >> 8) as u8
+        (self.opcode & 0x00FF) as u8
     }
 
     fn get_nibble(&self, nibble: u8) -> usize {
@@ -129,7 +150,7 @@ impl Opcode {
     }
 
     fn get_address(&self) -> usize {
-        (self.opcode >> 4) as usize
+        (self.opcode & 0x0FFF) as usize
     }
 
     fn get_xy_register_numbers(&self) -> (usize, usize) {
@@ -138,10 +159,10 @@ impl Opcode {
 
     fn run_0x0xxx_opcode(&self, cpu: &mut Cpu) {
         match self.opcode & 0xf {
-            0x0 => unimplemented!(),
+            0x0 => cpu.display.clear(),
             0xe => {
-                cpu.pc = cpu.memory[cpu.sp] as usize;
                 cpu.sp -= 1;
+                cpu.pc = cpu.memory[cpu.sp] as usize;
             },
             _ => unimplemented!()
         }
@@ -181,8 +202,8 @@ impl Opcode {
 }
 
 impl Cpu {
-    pub fn new() -> Cpu {
-        Cpu {
+    pub fn new(cartridge: &Cartridge) -> Cpu {
+        let mut cpu = Cpu {
             memory: [0; RAM_SIZE],
             v: [0; 16],
             i: 0,
@@ -190,8 +211,14 @@ impl Cpu {
             sp: 0,
             stack: [0; STACK_SIZE],
             sound_timer: Timer::new(Cpu::beep),
-            timer: Timer::new_no_callback()
+            timer: Timer::new_no_callback(),
+            display: Display::new()
+        };
+
+        for index in 0..cartridge.size {
+            cpu.memory[START_OF_PROGRAM + index] = cartridge.buffer[index];
         }
+        cpu
     }
 
     fn beep() {
@@ -200,18 +227,39 @@ impl Cpu {
 
     fn fetch_opcode(&mut self) -> Opcode {
         let opcode: u16 = (self.memory[self.pc] as u16) << 8 | (self.memory[self.pc + 1] as u16);
-        self.pc += 1;
+        self.pc += 2;
         Opcode::new(opcode)
     }
 
     fn run_opcode(&mut self) {
         let opcode: Opcode = self.fetch_opcode();
+        self.print_everything(&opcode);
         opcode.execute(self);
+    }
+
+    fn print_everything(&mut self, opcode: &Opcode) {
+        println!("Running 0x{:x}", opcode.opcode);
+        println!("Vx:");
+        for (idx, &reg) in self.v.iter().enumerate() {
+            println!("\tV{}: {:x}", idx, reg);
+        }
+
+        println!("PC: {:x}", self.pc);
+        println!("SP: {:x}", self.sp);
+        println!("I: {:x}", self.i);
+
+        for (idx, &data) in self.stack.iter().enumerate() {
+            println!("\tS[{}]: {:x}", idx, data);
+        }
     }
 
     pub fn tick(&mut self) {
         self.run_opcode();
         self.timer.tick();
         self.sound_timer.tick();
+
+        if self.display.needs_draw {
+            self.display.update();
+        }
     }
 }
