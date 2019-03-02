@@ -2,7 +2,6 @@ use crate::cartridge::Cartridge;
 use rand::Rng;
 use crate::timer::Timer;
 use crate::display::{Display, DISPLAY_HEIGHT, DISPLAY_WIDTH};
-use std::{thread, time};
 
 const RAM_SIZE: usize = 0xFFF;
 const STACK_SIZE: usize = 16;
